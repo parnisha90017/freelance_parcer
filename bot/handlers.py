@@ -1379,7 +1379,9 @@ async def set_min_price_callback(callback: CallbackQuery, state: FSMContext) -> 
 
 @router.callback_query(F.data == "add_keyword")
 async def add_keyword_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    if not await _require_owner(callback):
+    if not await _ensure_subscription(callback.from_user.id):
+        await callback.message.edit_text(SEARCH_LOCKED_TEXT, reply_markup=_subscription_keyboard(False))
+        await _safe_callback_answer(callback)
         return
 
     await state.set_state(BotStates.waiting_for_keyword)
@@ -1390,8 +1392,9 @@ async def add_keyword_callback(callback: CallbackQuery, state: FSMContext) -> No
 
 @router.message(StateFilter(BotStates.waiting_for_keyword))
 async def add_keyword_state_handler(message: Message, state: FSMContext) -> None:
-    if not await _require_owner(message):
+    if not await _ensure_subscription(message.from_user.id):
         await state.clear()
+        await message.answer(SEARCH_LOCKED_TEXT, reply_markup=_subscription_keyboard(False))
         return
 
     keyword = (message.text or "").strip()
@@ -1402,9 +1405,10 @@ async def add_keyword_state_handler(message: Message, state: FSMContext) -> None
 
     data = await state.get_data()
     target_collection = str(data.get("target_collection", "keywords"))
+    user_id = message.from_user.id
 
     if target_collection == "blacklist":
-        words = await _add_word_to_list(BLACKLIST_PATH, validated_keyword)
+        words = await _add_user_blacklist_word(user_id, validated_keyword)
         await state.clear()
         await message.answer(
             f"✅ Слово '{validated_keyword}' добавлено в чёрный список",
@@ -1413,10 +1417,10 @@ async def add_keyword_state_handler(message: Message, state: FSMContext) -> None
         return
 
     if target_collection == "priority":
-        priority = await _load_priority()
+        priority = await _load_user_priority(user_id)
         if validated_keyword not in priority["words"]:
             priority["words"].append(validated_keyword)
-        priority = await _save_priority(priority)
+        priority = await _save_user_priority(user_id, priority)
         await state.clear()
         await message.answer(
             f"✅ Слово '{validated_keyword}' добавлено в приоритетные",
@@ -1424,10 +1428,8 @@ async def add_keyword_state_handler(message: Message, state: FSMContext) -> None
         )
         return
 
-    await keywords_manager.add_keyword(validated_keyword)
+    keywords = await _add_user_keyword(user_id, validated_keyword)
     await state.clear()
-
-    keywords = await keywords_manager.load_keywords()
     await message.answer(
         f"✅ Слово '{validated_keyword}' добавлено",
         reply_markup=_keywords_menu_keyboard(keywords),
@@ -1473,7 +1475,9 @@ async def set_min_price_state_handler(message: Message, state: FSMContext) -> No
 
 @router.callback_query(F.data.startswith("remove_"))
 async def remove_keyword_callback(callback: CallbackQuery) -> None:
-    if not await _require_owner(callback):
+    if not await _ensure_subscription(callback.from_user.id):
+        await callback.message.edit_text(SEARCH_LOCKED_TEXT, reply_markup=_subscription_keyboard(False))
+        await _safe_callback_answer(callback)
         return
 
     keyword = callback.data.removeprefix("remove_").strip()
@@ -1481,7 +1485,7 @@ async def remove_keyword_callback(callback: CallbackQuery) -> None:
         await _safe_callback_answer(callback)
         return
 
-    keywords = await keywords_manager.remove_keyword(keyword)
+    keywords = await _remove_user_keyword(callback.from_user.id, keyword)
     await callback.message.edit_text(
         f"✅ Слово '{keyword}' удалено",
         reply_markup=_keywords_menu_keyboard(keywords),
