@@ -1,0 +1,13 @@
+CLAUDE.md
+.claude/
+.cursorrules
+.cursorignore
+.env
+data/projects.db
+data/bot.log
+__pycache__/
+*.pyc
+*.pyo
+.idea/
+.vscode/
+venv/
