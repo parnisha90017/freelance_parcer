@@ -18,7 +18,7 @@ python test_env/test_bot.py
 - standalone парсеры источников и API-контуров
 
 ## Боты
-- Основной бот: @dizai_kwork_parser_bot
+- Основной бот: @kworkparser1234_bot
 - Тестовый бот: @dizai_parser_test_bot
 
 ## Для себя
