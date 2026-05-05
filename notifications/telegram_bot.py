@@ -93,10 +93,11 @@ class TelegramNotifier:
         short_description = description[:300]
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
+                [InlineKeyboardButton(text="🔗 Открыть заказ", url=link)],
                 [
-                    InlineKeyboardButton(text="🔗 Открыть заказ", url=link),
-                    InlineKeyboardButton(text="✍️ Сгенерировать отклик", callback_data=f"respond_{project_id}"),
-                ]
+                    InlineKeyboardButton(text="✍️ Сгенерировать отклик", callback_data=f"gen_resp:{project_id}"),
+                    InlineKeyboardButton(text="📤 Отправить отклик", callback_data=f"send_resp:{project_id}"),
+                ],
             ]
         )
 
@@ -116,7 +117,7 @@ class TelegramNotifier:
             f"⏱️ Время: {time_estimate}\n"
             f"{explanation_line}\n"
             f"{short_description}\n\n"
-            "[🔗 Открыть заказ] [✍️ Сгенерировать отклик]"
+            "[🔗 Открыть заказ] [✍️ Сгенерировать отклик] [📤 Отправить отклик]"
         )
 
         for attempt in range(1, 4):

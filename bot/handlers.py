@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import time
+from html import escape as html_escape
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +58,8 @@ DEFAULT_PRIORITY = {
     "min_price_yellow": 3000,
 }
 pending_yookassa_payments: dict[int, tuple[str, float]] = {}
+pending_responses: dict[str, str] = {}
+PENDING_RESPONSES_LIMIT = 500
 LIST_PAGE_SIZE = 20
 SUBSCRIPTION_TEXT = (
     "🤖 Парсер фриланс-заказов\n\n"
@@ -901,6 +904,120 @@ async def respond_callback(callback: CallbackQuery) -> None:
 
     await _safe_callback_answer(callback, "Генерирую отклик...")
     await _send_ai_response(callback, project)
+
+
+# ---------------------------------------------------------------------------
+# Generate / send AI response — двухэтапный полу-автоматический режим
+# ---------------------------------------------------------------------------
+
+
+def _store_pending_response(project_id: str, response_text: str) -> None:
+    pending_responses[project_id] = response_text
+    while len(pending_responses) > PENDING_RESPONSES_LIMIT:
+        oldest = next(iter(pending_responses))
+        if oldest == project_id:
+            break
+        del pending_responses[oldest]
+
+
+def _response_action_keyboard(project_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📤 Отправить", callback_data=f"send_resp:{project_id}"),
+                InlineKeyboardButton(text="🔄 Перегенерировать", callback_data=f"gen_resp:{project_id}"),
+            ]
+        ]
+    )
+
+
+def _final_response_keyboard(link: str) -> InlineKeyboardMarkup | None:
+    if not link:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔗 Открыть заказ", url=link)]]
+    )
+
+
+async def _generate_ai_response(project: dict[str, Any]) -> str | None:
+    """Возвращает текст отклика или None если AI недоступен (rate limit, ошибка, нет ключа)."""
+    try:
+        response_text = await ai_helper.generate_response(project)
+    except Exception:
+        logger.exception("Ошибка генерации отклика")
+        return None
+
+    if ai_helper.last_status in {"rate_limited", "error", "disabled"}:
+        return None
+
+    response_text = (response_text or "").strip()
+    return response_text or None
+
+
+@router.callback_query(F.data.startswith("gen_resp:"))
+async def gen_resp_callback(callback: CallbackQuery) -> None:
+    if not await _require_owner(callback):
+        return
+
+    if is_rate_limited(callback.from_user.id, "gen_resp", max_requests=1, period=5):
+        await _safe_callback_answer(callback, "⏳ Подожди пару секунд", show_alert=False)
+        return
+
+    project_id = callback.data.removeprefix("gen_resp:").strip()
+    project = get_project(project_id)
+    if project is None:
+        await _safe_callback_answer(callback, "Заказ не найден (мог истечь из памяти)", show_alert=True)
+        return
+
+    await _safe_callback_answer(callback, "Генерирую отклик...")
+    response_text = await _generate_ai_response(project)
+    if response_text is None:
+        await callback.message.answer("⚠️ ИИ временно недоступен, попробуй позже")
+        return
+
+    _store_pending_response(project_id, response_text)
+    await callback.message.answer(
+        f"✍️ Отклик готов:\n\n{response_text}",
+        reply_markup=_response_action_keyboard(project_id),
+    )
+
+
+@router.callback_query(F.data.startswith("send_resp:"))
+async def send_resp_callback(callback: CallbackQuery) -> None:
+    if not await _require_owner(callback):
+        return
+
+    project_id = callback.data.removeprefix("send_resp:").strip()
+    project = get_project(project_id)
+    if project is None:
+        await _safe_callback_answer(callback, "Заказ не найден (мог истечь из памяти)", show_alert=True)
+        return
+
+    response_text = pending_responses.get(project_id)
+    if not response_text:
+        if is_rate_limited(callback.from_user.id, "gen_resp", max_requests=1, period=5):
+            await _safe_callback_answer(callback, "⏳ Подожди пару секунд", show_alert=False)
+            return
+
+        await _safe_callback_answer(callback, "Генерирую отклик...")
+        response_text = await _generate_ai_response(project)
+        if response_text is None:
+            await callback.message.answer("⚠️ ИИ временно недоступен, попробуй позже")
+            return
+        _store_pending_response(project_id, response_text)
+    else:
+        await _safe_callback_answer(callback)
+
+    link = str(project.get("link", "")).strip()
+    body = (
+        "📋 Скопируй отклик и вставь на странице заказа:\n\n"
+        f"<pre>{html_escape(response_text)}</pre>"
+    )
+    await callback.message.answer(
+        body,
+        reply_markup=_final_response_keyboard(link),
+        parse_mode="HTML",
+    )
 
 
 @router.message(CommandStart())
