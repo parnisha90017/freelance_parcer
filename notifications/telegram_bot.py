@@ -49,7 +49,7 @@ class TelegramNotifier:
     bot_token: str
     user_id: int
     ai_helper: AIHelper = field(
-        default_factory=lambda: AIHelper(api_key=config.GROQ_API_KEY, model=config.GROQ_MODEL)
+        default_factory=lambda: AIHelper(api_key=config.OPENROUTER_API_KEY, model=config.AI_MODEL)
     )
 
     async def send_message(self, text: str) -> None:

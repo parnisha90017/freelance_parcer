@@ -37,7 +37,7 @@ LOG_FORMAT = "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
 router = Router()
 keywords_manager = KeywordsManager(Path(config.config.KEYWORDS_JSON_PATH))
 notifier = TelegramNotifier(bot_token=config.config.TELEGRAM_BOT_TOKEN, user_id=config.config.TELEGRAM_USER_ID)
-ai_helper = AIHelper(api_key=config.config.GROQ_API_KEY, model=config.config.GROQ_MODEL)
+ai_helper = AIHelper(api_key=config.config.OPENROUTER_API_KEY, model=config.config.AI_MODEL)
 
 
 def _main_menu_keyboard() -> InlineKeyboardMarkup:

@@ -9,6 +9,8 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from config import config
+
 
 _EVALUATE_SYSTEM_PROMPT = (
     "Ты оцениваешь заказы для фрилансера.\n"
@@ -135,12 +137,14 @@ class AIHelper:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            "HTTP-Referer": config.OPENROUTER_HTTP_REFERER,
+            "X-Title": config.OPENROUTER_APP_TITLE,
         }
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
+                    "https://openrouter.ai/api/v1/chat/completions",
                     headers=headers,
                     json=payload,
                 )
@@ -148,7 +152,7 @@ class AIHelper:
                     self.consecutive_429_count += 1
                     self.last_status = "rate_limited"
                     self.skip_ai_for_cycle = True
-                    logger.warning("AIHelper: Groq 429, skipping AI evaluation")
+                    logger.warning("AIHelper: OpenRouter 429, skipping AI evaluation")
                     return ""
 
                 response.raise_for_status()
@@ -160,7 +164,7 @@ class AIHelper:
         except Exception as exc:
             self.consecutive_429_count = 0
             self.last_status = "error"
-            logger.warning("AIHelper: ошибка Groq API: {}", exc)
+            logger.warning("AIHelper: ошибка OpenRouter API: {}", exc)
             return ""
         finally:
             await asyncio.sleep(2)

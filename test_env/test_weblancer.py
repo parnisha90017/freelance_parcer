@@ -62,7 +62,7 @@ async def main() -> None:
         print("No projects left after filters")
         return
 
-    ai_helper = AIHelper(api_key=config.GROQ_API_KEY, model=config.GROQ_MODEL)
+    ai_helper = AIHelper(api_key=config.OPENROUTER_API_KEY, model=config.AI_MODEL)
     sample_project = filtered_projects[0]
     evaluation = await ai_helper.evaluate_project(sample_project)
 

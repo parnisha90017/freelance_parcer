@@ -32,7 +32,7 @@ BLACKLIST_PATH = Path(config.KEYWORDS_JSON_PATH).parent / "blacklist.json"
 class ParserScheduler:
     scheduler: AsyncIOScheduler = field(default_factory=AsyncIOScheduler)
     ai_helper: AIHelper = field(
-        default_factory=lambda: AIHelper(api_key=config.GROQ_API_KEY, model=config.GROQ_MODEL)
+        default_factory=lambda: AIHelper(api_key=config.OPENROUTER_API_KEY, model=config.AI_MODEL)
     )
     auto_parsing_enabled: bool = False
     last_run_at: datetime | None = None

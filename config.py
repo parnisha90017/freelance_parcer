@@ -21,6 +21,10 @@ class Config:
     DATABASE_URL: str = "sqlite+aiosqlite:///data/projects.db"
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+    AI_MODEL: str = os.getenv("AI_MODEL", "deepseek/deepseek-v4-flash")
+    OPENROUTER_HTTP_REFERER: str = os.getenv("OPENROUTER_HTTP_REFERER", "https://github.com/freelance-parser")
+    OPENROUTER_APP_TITLE: str = os.getenv("OPENROUTER_APP_TITLE", "Freelance Parser")
     KWORK_LOGIN: str = os.getenv("KWORK_LOGIN", "")
     KWORK_PASSWORD: str = os.getenv("KWORK_PASSWORD", "")
     KWORK_PHONE_LAST: str = os.getenv("KWORK_PHONE_LAST", "")

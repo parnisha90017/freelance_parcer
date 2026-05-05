@@ -46,7 +46,7 @@ from notifications.telegram_bot import PLATFORM_LABELS
 router = Router()
 keywords_manager = KeywordsManager(Path(config.KEYWORDS_JSON_PATH))
 notifier = TelegramNotifier(bot_token=config.TELEGRAM_BOT_TOKEN, user_id=config.TELEGRAM_USER_ID)
-ai_helper = AIHelper(api_key=config.GROQ_API_KEY, model=config.GROQ_MODEL)
+ai_helper = AIHelper(api_key=config.OPENROUTER_API_KEY, model=config.AI_MODEL)
 DATA_DIR = Path(config.KEYWORDS_JSON_PATH).parent
 USER_FILTERS_DIR = DATA_DIR / "users"
 BLACKLIST_PATH = DATA_DIR / "blacklist.json"
@@ -638,6 +638,7 @@ def _safe_callback_value(callback: CallbackQuery) -> str:
 def _log_masked_config_usage() -> None:
     for name, value in (
         ("TELEGRAM_BOT_TOKEN", config.TELEGRAM_BOT_TOKEN),
+        ("OPENROUTER_API_KEY", config.OPENROUTER_API_KEY),
         ("GROQ_API_KEY", config.GROQ_API_KEY),
         ("YOOMONEY_TOKEN", config.YOOMONEY_TOKEN),
     ):
