@@ -14,6 +14,7 @@ from aiogram.exceptions import TelegramNetworkError
 from bot.main_bot import dispatcher, run_bot
 from database.db import init_db
 from services.scheduler import parser_scheduler
+from services.telegram_client import start_client, stop_client
 
 LOG_FORMAT = "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
 
@@ -30,6 +31,7 @@ def setup_logging() -> None:
 async def run_app() -> None:
     await init_db()
     await parser_scheduler.start()
+    await start_client()
     logger.info("Бот запущен, автопарсинг выключен по умолчанию")
 
     try:
@@ -41,6 +43,7 @@ async def run_app() -> None:
                 logger.warning("Не удалось подключить бота: {}", error)
                 await asyncio.sleep(10)
     finally:
+        await stop_client()
         await parser_scheduler.shutdown()
 
 

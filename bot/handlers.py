@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from aiogram.types import (
 from loguru import logger
 
 from bot.rate_limiter import is_rate_limited
-from bot.states import BotStates
+from bot.states import AddTelegramSource, BotStates
 from config import config
 from filters import KeywordFilter, PriceFilter
 from notifications import TelegramNotifier
@@ -33,10 +34,11 @@ from parsers.kwork import KworkParser
 from parsers.weblancer import WeblancerParser
 from parsers.pchel import PchelParser
 from parsers.youdo import YouDoParser
-from services import KeywordsManager, subscription_manager
+from services import KeywordsManager, subscription_manager, telegram_sources_manager
 from services.ai_helper import AIHelper
 from services.scheduler import parser_scheduler
 from services.settings_manager import settings_manager
+from services.telegram_client import get_client, is_ready
 from services.yookassa_payment import check_payment, create_payment
 from database.db import get_project_stats
 from notifications.telegram_bot import PLATFORM_LABELS
@@ -103,6 +105,7 @@ def _main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
                 [InlineKeyboardButton(text=_auto_parsing_button_text(), callback_data="toggle_auto_parsing")],
                 [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
                 [InlineKeyboardButton(text="⚙️ Площадки", callback_data="platforms_menu")],
+                [InlineKeyboardButton(text="📡 Telegram-источники", callback_data="tgsrc:menu")],
             ]
         )
 
@@ -218,6 +221,7 @@ def _platforms_menu_keyboard(settings: dict[str, bool | int], platform_today_cou
             [InlineKeyboardButton(text=label("YouDo", bool(settings["youdo_enabled"])), callback_data="toggle_platform_youdo")],
             [InlineKeyboardButton(text=label("Pchel", bool(settings["pchel_enabled"])), callback_data="toggle_platform_pchel")],
             [InlineKeyboardButton(text=label("FreelanceHunt", bool(settings["freelancehunt_enabled"])), callback_data="toggle_platform_freelancehunt")],
+            [InlineKeyboardButton(text=label("Telegram", bool(settings.get("telegram_chats_enabled", False))), callback_data="toggle_platform_telegram")],
             [InlineKeyboardButton(text=f"💰 Мин. цена: {int(settings['min_price'])}₽", callback_data="set_min_price")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")],
         ]
@@ -1544,6 +1548,333 @@ async def search_command_handler(message: Message) -> None:
 @router.callback_query(F.data == "subscribe_menu")
 async def subscribe_menu_callback(callback: CallbackQuery) -> None:
     await _show_subscription(callback)
+
+
+# ============================================================================
+# Telegram-источники (управление списком чатов/каналов для парсинга)
+# ============================================================================
+
+_TG_LINK_RE = re.compile(
+    r"^(?:https?://)?t\.me/(?:joinchat/|\+)?(?P<rest>[A-Za-z0-9_+\-]+)/?$"
+)
+
+
+def _parse_source_input(raw: str) -> tuple[str, str | None]:
+    """Возвращает ('public', username) или ('invite', hash) или ('invalid', None)."""
+    text = raw.strip()
+    if not text:
+        return "invalid", None
+
+    if text.startswith("@"):
+        return "public", text[1:]
+
+    match = _TG_LINK_RE.match(text)
+    if match:
+        rest = match.group("rest")
+        # invite: t.me/+XXX или t.me/joinchat/XXX
+        if "joinchat/" in text or "/+" in text or text.startswith(("+", "https://t.me/+")):
+            return "invite", rest.lstrip("+")
+        return "public", rest
+
+    if re.fullmatch(r"[A-Za-z0-9_]{4,32}", text):
+        return "public", text
+
+    return "invalid", None
+
+
+def _detect_entity_type(entity: Any) -> str:
+    if getattr(entity, "broadcast", False):
+        return "channel"
+    return "chat"
+
+
+def _tgsrc_format_row(source: dict[str, Any]) -> str:
+    mark = "✅" if source.get("enabled") else "❌"
+    handle = source.get("username") or f"id={source.get('chat_id')}"
+    return f"{mark} {source.get('title', '?')} ({source.get('type', '?')}) — {handle}"
+
+
+def _tgsrc_list_keyboard(sources: list[dict[str, Any]]) -> InlineKeyboardMarkup:
+    keyboard: list[list[InlineKeyboardButton]] = []
+    for source in sources:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=_tgsrc_format_row(source),
+                    callback_data=f"tgsrc:src:{source['chat_id']}",
+                )
+            ]
+        )
+    keyboard.append([InlineKeyboardButton(text="➕ Добавить источник", callback_data="tgsrc:add")])
+    keyboard.append([InlineKeyboardButton(text="🔄 Обновить список", callback_data="tgsrc:menu")])
+    keyboard.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def _tgsrc_source_keyboard(source: dict[str, Any]) -> InlineKeyboardMarkup:
+    toggle_text = "❌ Выключить" if source.get("enabled") else "🔛 Включить"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=toggle_text, callback_data=f"tgsrc:toggle:{source['chat_id']}")],
+            [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"tgsrc:askdel:{source['chat_id']}")],
+            [InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="tgsrc:menu")],
+        ]
+    )
+
+
+def _tgsrc_confirm_delete_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да", callback_data=f"tgsrc:del:{chat_id}"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=f"tgsrc:src:{chat_id}"),
+            ]
+        ]
+    )
+
+
+async def _show_tgsrc_menu(target: Message | CallbackQuery) -> None:
+    sources = await telegram_sources_manager.load_sources()
+    if not sources:
+        text = (
+            "📡 Telegram-источники\n\n"
+            "Список пуст. Добавь чат или канал, в который ты уже вступил с аккаунта-парсера."
+        )
+    else:
+        text = f"📡 Telegram-источники\n\nВсего: {len(sources)}"
+
+    keyboard = _tgsrc_list_keyboard(sources)
+    if isinstance(target, CallbackQuery):
+        try:
+            await target.message.edit_text(text, reply_markup=keyboard)
+        except Exception:
+            await target.message.answer(text, reply_markup=keyboard)
+        await _safe_callback_answer(target)
+        return
+    await target.answer(text, reply_markup=keyboard)
+
+
+def _safe_int(value: str) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+@router.callback_query(F.data == "tgsrc:menu")
+async def tgsrc_menu_callback(callback: CallbackQuery) -> None:
+    if not await _require_owner(callback):
+        return
+    await _show_tgsrc_menu(callback)
+
+
+@router.callback_query(F.data.startswith("tgsrc:src:"))
+async def tgsrc_show_source_callback(callback: CallbackQuery) -> None:
+    if not await _require_owner(callback):
+        return
+
+    chat_id = _safe_int(callback.data.removeprefix("tgsrc:src:"))
+    source = await telegram_sources_manager.find_by_chat_id(chat_id) if chat_id is not None else None
+    if not source:
+        await _safe_callback_answer(callback, "Источник не найден", show_alert=True)
+        await _show_tgsrc_menu(callback)
+        return
+
+    text = (
+        f"📡 {source['title']}\n\n"
+        f"Тип: {source['type']}\n"
+        f"ID: {source['chat_id']}\n"
+        f"Username: {source.get('username') or '—'}\n"
+        f"Статус: {'✅ включён' if source['enabled'] else '❌ выключен'}\n"
+        f"Приватный: {'да' if source.get('is_private') else 'нет'}"
+    )
+    await callback.message.edit_text(text, reply_markup=_tgsrc_source_keyboard(source))
+    await _safe_callback_answer(callback)
+
+
+@router.callback_query(F.data.startswith("tgsrc:toggle:"))
+async def tgsrc_toggle_callback(callback: CallbackQuery) -> None:
+    if not await _require_owner(callback):
+        return
+
+    chat_id = _safe_int(callback.data.removeprefix("tgsrc:toggle:"))
+    if chat_id is None:
+        await _safe_callback_answer(callback)
+        return
+
+    new_state = await telegram_sources_manager.toggle_source(chat_id)
+    if new_state is None:
+        await _safe_callback_answer(callback, "Источник не найден", show_alert=True)
+    else:
+        await _safe_callback_answer(callback, "Включён" if new_state else "Выключен")
+    await _show_tgsrc_menu(callback)
+
+
+@router.callback_query(F.data.startswith("tgsrc:askdel:"))
+async def tgsrc_ask_delete_callback(callback: CallbackQuery) -> None:
+    if not await _require_owner(callback):
+        return
+
+    chat_id = _safe_int(callback.data.removeprefix("tgsrc:askdel:"))
+    source = await telegram_sources_manager.find_by_chat_id(chat_id) if chat_id is not None else None
+    if not source:
+        await _safe_callback_answer(callback, "Источник не найден", show_alert=True)
+        return
+
+    text = (
+        f"Удалить источник?\n\n"
+        f"📡 {source['title']} ({source.get('username') or source['chat_id']})\n\n"
+        f"⚠️ Из чата автоматически НЕ выйду — выйди вручную, если нужно."
+    )
+    await callback.message.edit_text(text, reply_markup=_tgsrc_confirm_delete_keyboard(chat_id))
+    await _safe_callback_answer(callback)
+
+
+@router.callback_query(F.data.startswith("tgsrc:del:"))
+async def tgsrc_delete_callback(callback: CallbackQuery) -> None:
+    if not await _require_owner(callback):
+        return
+
+    chat_id = _safe_int(callback.data.removeprefix("tgsrc:del:"))
+    if chat_id is None:
+        await _safe_callback_answer(callback)
+        return
+
+    removed = await telegram_sources_manager.remove_source(chat_id)
+    await _safe_callback_answer(callback, "Удалён" if removed else "Не найден")
+    await _show_tgsrc_menu(callback)
+
+
+@router.callback_query(F.data == "tgsrc:add")
+async def tgsrc_add_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await _require_owner(callback):
+        return
+
+    await state.set_state(AddTelegramSource.waiting_for_link)
+    await callback.message.edit_text(
+        "Пришли ссылку или username чата/канала.\n\n"
+        "Примеры:\n"
+        "• @chatname\n"
+        "• https://t.me/chatname\n"
+        "• https://t.me/+xxxxxxxxxxx (для приватных)\n\n"
+        "⚠️ Ты должен быть уже вступившим в этот чат с аккаунта-парсера.\n"
+        "Бот сам никуда не вступает.",
+    )
+    await _safe_callback_answer(callback)
+
+
+@router.message(StateFilter(AddTelegramSource.waiting_for_link))
+async def tgsrc_add_state_handler(message: Message, state: FSMContext) -> None:
+    if not await _require_owner(message):
+        await state.clear()
+        return
+
+    raw = (message.text or "").strip()
+    kind, value = _parse_source_input(raw)
+    if kind == "invalid" or not value:
+        await message.answer("❌ Не понял формат. Пришли @username, t.me/... или invite-ссылку.")
+        return
+
+    if not await is_ready():
+        await state.clear()
+        await message.answer(
+            "❌ Telethon-клиент не готов. Запусти `python auth_telethon.py` "
+            "на сервере и проверь TG_PARSER_* в .env."
+        )
+        return
+
+    client = get_client()
+    entity = None
+    is_private = False
+    username_for_storage = ""
+
+    try:
+        if kind == "public":
+            entity = await client.get_entity(value)
+            username_for_storage = f"@{getattr(entity, 'username', None) or value}"
+        else:  # invite
+            from telethon.tl.functions.messages import CheckChatInviteRequest
+            from telethon.tl.types import ChatInviteAlready
+
+            invite_info = await client(CheckChatInviteRequest(value))
+            if isinstance(invite_info, ChatInviteAlready):
+                entity = invite_info.chat
+                username_for_storage = raw  # сохраняем как пользователь прислал
+                is_private = True
+            else:
+                await state.clear()
+                await message.answer(
+                    "❌ Ты ещё не вступил в этот приватный чат с аккаунта-парсера.\n"
+                    "Сначала вступи вручную, потом добавь сюда."
+                )
+                return
+    except Exception as exc:
+        from telethon.errors import (
+            ChannelPrivateError,
+            FloodWaitError,
+            InviteHashExpiredError,
+            InviteHashInvalidError,
+            UsernameNotOccupiedError,
+        )
+
+        await state.clear()
+        if isinstance(exc, FloodWaitError):
+            await message.answer(
+                f"⏳ Telegram временно ограничил запросы, попробуй через {exc.seconds} сек."
+            )
+        elif isinstance(exc, (ChannelPrivateError, UsernameNotOccupiedError, ValueError)):
+            await message.answer(
+                "❌ Не могу получить доступ к этому чату.\n"
+                "Сначала вступи в него вручную с аккаунта-парсера, потом добавь сюда."
+            )
+        elif isinstance(exc, (InviteHashExpiredError, InviteHashInvalidError)):
+            await message.answer("❌ Invite-ссылка протухла или невалидна. Попроси новую.")
+        else:
+            logger.exception("Ошибка при добавлении Telegram-источника")
+            await message.answer(f"❌ Не удалось добавить: {exc}")
+        return
+
+    chat_id = getattr(entity, "id", None)
+    if chat_id is None:
+        await state.clear()
+        await message.answer("❌ Не удалось определить ID чата")
+        return
+
+    # Telethon отдаёт positive id для каналов/мегагрупп; нормализуем к -100... для совместимости
+    if chat_id > 0 and (getattr(entity, "broadcast", False) or getattr(entity, "megagroup", False)):
+        chat_id = int(f"-100{chat_id}")
+
+    type_ = _detect_entity_type(entity)
+    title = getattr(entity, "title", None) or username_for_storage or "Источник"
+    if not username_for_storage:
+        username_for_storage = f"private:{chat_id}"
+
+    record, was_added = await telegram_sources_manager.add_source(
+        username=username_for_storage,
+        chat_id=chat_id,
+        type_=type_,
+        title=title,
+        is_private=is_private,
+        enabled=True,
+    )
+    await state.clear()
+
+    if not was_added:
+        status = "включён" if record["enabled"] else "выключен"
+        await message.answer(
+            f"ℹ️ Источник уже добавлен: {record['title']}\n"
+            f"Текущий статус: {status}"
+        )
+    else:
+        await message.answer(
+            f"✅ Источник добавлен: {record['title']} ({record['type']})"
+        )
+    await _show_tgsrc_menu(message)
+
+
+# ============================================================================
+# конец Telegram-источников
+# ============================================================================
 
 
 @router.callback_query()

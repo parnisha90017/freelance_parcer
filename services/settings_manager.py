@@ -69,6 +69,7 @@ class SettingsManager:
             "youdo_enabled": True,
             "pchel_enabled": True,
             "freelancehunt_enabled": False,
+            "telegram_chats_enabled": False,
             "min_price": config.MIN_PRICE,
         }
 
@@ -99,6 +100,8 @@ class SettingsManager:
             return "pchel_enabled"
         if normalized in {"freelancehunt", "freelance_hunt", "freelance-hunt"}:
             return "freelancehunt_enabled"
+        if normalized in {"telegram", "telegram_chats", "telegram-chats", "tgchats"}:
+            return "telegram_chats_enabled"
         raise ValueError(f"Unknown platform: {platform}")
 
 

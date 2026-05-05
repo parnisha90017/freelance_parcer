@@ -16,6 +16,8 @@ class Config:
     OWNER_ID: int = int(os.getenv("OWNER_ID", "0"))
     KEYWORDS_JSON_PATH: str = str(Path(__file__).resolve().parent / "data" / "keywords.json")
     SETTINGS_JSON_PATH: str = str(Path(__file__).resolve().parent / "data" / "settings.json")
+    TELEGRAM_SOURCES_JSON_PATH: str = str(Path(__file__).resolve().parent / "data" / "telegram_sources.json")
+    TELETHON_SESSION_PATH: str = str(Path(__file__).resolve().parent / "sessions" / "parser")
     DATABASE_URL: str = "sqlite+aiosqlite:///data/projects.db"
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -34,6 +36,9 @@ class Config:
     YOOKASSA_SHOP_ID: str = os.getenv("YOOKASSA_SHOP_ID", "")
     YOOKASSA_SECRET_KEY: str = os.getenv("YOOKASSA_SECRET_KEY", "")
     TELEGRAM_BOT_USERNAME: str = os.getenv("TELEGRAM_BOT_USERNAME", "")
+    TG_PARSER_API_ID: str = os.getenv("TG_PARSER_API_ID", "")
+    TG_PARSER_API_HASH: str = os.getenv("TG_PARSER_API_HASH", "")
+    TG_PARSER_PHONE: str = os.getenv("TG_PARSER_PHONE", "")
     SUBSCRIPTION_DAYS: int = 30
     KWORK_CATEGORIES_IDS: list[int | str] = None
     FL_CATEGORIES: list[str] = None

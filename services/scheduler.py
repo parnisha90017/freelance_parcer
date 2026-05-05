@@ -17,6 +17,7 @@ from parsers.fl import FLParser
 from parsers.freelancehunt import FreelanceHuntParser
 from parsers.freelanceru import FreelanceRuParser
 from parsers.kwork import KworkParser
+from parsers.telegram_chats import TelegramChatsParser
 from parsers.weblancer import WeblancerParser
 from parsers.pchel import PchelParser
 from parsers.youdo import YouDoParser
@@ -96,6 +97,7 @@ class ParserScheduler:
         youdo_count = 0
         pchel_count = 0
         freelancehunt_count = 0
+        telegram_count = 0
 
         self.ai_helper.skip_ai_for_cycle = False
         self.ai_helper.reset_cycle_state()
@@ -203,6 +205,18 @@ class ParserScheduler:
             finally:
                 await freelancehunt_parser.close()
 
+        if settings.get("telegram_chats_enabled", False):
+            telegram_parser = TelegramChatsParser()
+            try:
+                telegram_projects = await telegram_parser.parse()
+                telegram_count = len(telegram_projects)
+                await log_parser_stats("Telegram", telegram_projects)
+                projects.extend(telegram_projects)
+            except Exception as e:
+                logger.warning("Telegram: ошибка, пропускаем: {}", e)
+            finally:
+                await telegram_parser.close()
+
         keyword_filter = KeywordFilter(keywords_path=config.KEYWORDS_JSON_PATH)
         filtered_projects = await keyword_filter.filter(projects)
         price_filter = PriceFilter(min_price=int(settings["min_price"]))
@@ -222,7 +236,7 @@ class ParserScheduler:
             filtered_projects = remaining_projects
 
         logger.info(
-            "Kwork: {} | FL.ru: {} | Freelance.ru: {} | Weblancer: {} | YouDo: {} | Pchel: {} | FreelanceHunt: {} | После фильтра: {}",
+            "Kwork: {} | FL.ru: {} | Freelance.ru: {} | Weblancer: {} | YouDo: {} | Pchel: {} | FreelanceHunt: {} | Telegram: {} | После фильтра: {}",
             kwork_count,
             fl_count,
             freelanceru_count,
@@ -230,6 +244,7 @@ class ParserScheduler:
             youdo_count,
             pchel_count,
             freelancehunt_count,
+            telegram_count,
             len(filtered_projects),
         )
 
@@ -299,6 +314,7 @@ class ParserScheduler:
             + youdo_count
             + pchel_count
             + freelancehunt_count
+            + telegram_count
         )
         filtered_count = max(total_parsed - sent_count - duplicate_count, 0)
 
@@ -308,7 +324,7 @@ class ParserScheduler:
             "📊 Парсинг завершён\n\n"
             f"Kwork: {kwork_count} | FL.ru: {fl_count} | Freelance.ru: {freelanceru_count} | "
             f"Weblancer: {weblancer_count} | YouDo: {youdo_count} | Pchel: {pchel_count} | "
-            f"FreelanceHunt: {freelancehunt_count}\n"
+            f"FreelanceHunt: {freelancehunt_count} | Telegram: {telegram_count}\n"
             f"👥 Получателей: {len(subscriber_ids)}\n"
             f"📤 Новых отправлено: {sent_count}\n"
             f"✅ Доставлено сообщений: {delivered_messages}\n"

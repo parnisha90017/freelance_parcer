@@ -1,6 +1,8 @@
 .env
 data/projects.db
 data/bot.log
+sessions/*.session
+sessions/*.session-journal
 __pycache__/
 .vscode/
 venv/

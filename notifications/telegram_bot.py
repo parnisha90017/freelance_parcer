@@ -34,6 +34,7 @@ PLATFORM_LABELS = {
     "youdo.com": "YouDo",
     "pchel.net": "Pchel",
     "freelancehunt.com": "FreelanceHunt",
+    "t.me": "Telegram",
 }
 
 
